@@ -1,17 +1,12 @@
 from django import forms
-from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
-from users.models import MyUser, Profile
-from django.contrib.sites.shortcuts import get_current_site
-from django.template.loader import render_to_string
-from django.utils.http import urlsafe_base64_encode
-from django.utils.encoding import force_bytes
+from django.contrib.auth.forms import PasswordResetForm
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import EmailMultiAlternatives
-
-
-
-
-
+from django.template.loader import render_to_string
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
+from django.contrib.sites.shortcuts import get_current_site
+from users.models import MyUser, Profile
 
 
 class CustomPasswordResetForm(PasswordResetForm):
@@ -26,7 +21,7 @@ class CustomPasswordResetForm(PasswordResetForm):
             'autocomplete': 'email',
         })
     )
-    
+
     def send_mail(self, subject_template_name, email_template_name, context, from_email, to_email, html_email_template_name=None):
         subject = render_to_string(subject_template_name, context)
         subject = ''.join(subject.splitlines())
@@ -75,7 +70,7 @@ class UserCreateForm(forms.ModelForm):
     """ User Create or Registration Form """
     class Meta:
         model = MyUser
-        fields = ('first_name', 'last_name', 'username', 'email', 'password', 'city', 'user_type')
+        fields = ('first_name', 'last_name', 'username', 'email', 'password', 'city')
         widgets = {
             'first_name': forms.TextInput(attrs={'class': 'form-control'}),
             'last_name': forms.TextInput(attrs={'class': 'form-control'}),
@@ -83,8 +78,8 @@ class UserCreateForm(forms.ModelForm):
             'email': forms.EmailInput(attrs={'class': 'form-control'}),
             'password': forms.PasswordInput(attrs={'class': 'form-control'}),
             'city': forms.TextInput(attrs={'class': 'form-control'}),
-            'user_type': forms.Select(attrs={'class': 'form-control'}),
         }
+
 
 class UserUpdateForm(forms.ModelForm):
     """ User Update Form by Admin """
@@ -100,11 +95,12 @@ class UserUpdateForm(forms.ModelForm):
             'user_type': forms.Select(attrs={'class': 'form-control'}),
         }
 
+
 class CustomerUpdateForm(forms.ModelForm):
-    """ User Profile Detail Update Form"""
+    """ User Update Form for Customer """
     class Meta:
         model = MyUser
-        fields = ('first_name', 'last_name', 'username', 'email', 'city',)
+        fields = ('first_name', 'last_name', 'username', 'email', 'city')
         widgets = {
             'first_name': forms.TextInput(attrs={'class': 'form-control'}),
             'last_name': forms.TextInput(attrs={'class': 'form-control'}),
@@ -112,6 +108,7 @@ class CustomerUpdateForm(forms.ModelForm):
             'email': forms.EmailInput(attrs={'class': 'form-control'}),
             'city': forms.TextInput(attrs={'class': 'form-control'}),
         }
+
 
 class CustomerProfileForm(forms.ModelForm):
     """ User profile photo form """
@@ -124,5 +121,9 @@ class CustomerProfileForm(forms.ModelForm):
 
 
 class InviteUserForm(forms.Form):
-    email = forms.EmailField(widget=forms.EmailInput(attrs={'class': 'form-control'}))
-    user_type = forms.ChoiceField(choices=[('admin', 'Admin'), ('customer', 'Customer')], widget=forms.Select(attrs={'class': 'form-control'}))
+    email = forms.EmailField(label='Email')
+    USER_TYPE_CHOICES = [
+        ('admin', 'Admin'),
+        ('customer', 'Customer'),
+    ]
+    user_type = forms.ChoiceField(choices=USER_TYPE_CHOICES, label='User Type')
