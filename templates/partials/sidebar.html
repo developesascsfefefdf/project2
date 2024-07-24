@@ -45,6 +45,7 @@
                 <span class="menu-title">Dashboard</span>
             </a>
         </li>
+        {% if user.user_type == 'admin' %}
         <li class="nav-item menu-items">
             <a aria-controls="ui-basic" aria-expanded="false" class="nav-link" data-toggle="collapse" href="#ui-basic">
               <span class="menu-icon">
@@ -61,5 +62,6 @@
                 </ul>
             </div>
         </li>
+        {% endif %}
     </ul>
 </nav>
