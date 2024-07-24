@@ -1,67 +1,45 @@
-from django.shortcuts import render, redirect
-from django.urls import reverse_lazy
-from django.views.generic import ListView, CreateView, UpdateView, DeleteView
+from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse_lazy, reverse
+from django.views.generic import ListView, CreateView, UpdateView, DeleteView, FormView
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
-from django.conf import settings  # Import settings
-from users.models import MyUser
-from users.forms import UserCreateForm, UserUpdateForm, CustomerUpdateForm, CustomerProfileForm, CustomPasswordResetForm
-from django.contrib.auth.views import PasswordResetView, LogoutView
-from django.contrib.auth.forms import SetPasswordForm
-from django.contrib.auth.views import PasswordResetConfirmView
-from django.urls import reverse_lazy
-from django.utils.translation import gettext_lazy as _
-from django.views.generic import TemplateView
+from django.conf import settings
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_protect
+from django.utils.safestring import mark_safe
 from django.core.mail import send_mail
-from django.urls import reverse
-from django.shortcuts import redirect
-from django.views.generic.edit import FormView
-from .forms import InviteUserForm
-from django.contrib.auth.tokens import PasswordResetTokenGenerator
-from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
-from django.utils.encoding import force_bytes, force_str
-from users.forms import InviteUserForm
+
 from users.models import MyUser
-from users.token_generator import custom_token_generator 
-from django.db import IntegrityError
+from users.forms import UserCreateForm, UserUpdateForm, CustomerUpdateForm, CustomerProfileForm, CustomPasswordResetForm, InviteUserForm
+from django.contrib.auth.views import PasswordResetView, LogoutView, PasswordResetConfirmView
+from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.exceptions import TokenError
+from .utils import generate_invite_token
+from django.contrib.auth.forms import SetPasswordForm
+
 
 class MyMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """ Mixin for Authentication and User is Admin or not """
+    """Mixin for Authentication and User is Admin or not."""
     def test_func(self):
         return self.request.user.user_type == 'admin'
 
 class InviteUserView(MyMixin, FormView):
     form_class = InviteUserForm
     template_name = 'users/invite.html'
-    token_generator = PasswordResetTokenGenerator()
-    
+
     def form_valid(self, form):
         email = form.cleaned_data['email']
         user_type = form.cleaned_data['user_type']
         
-        try:
-            user, created = MyUser.objects.get_or_create(
-                email=email,
-                defaults={'user_type': user_type, 'username': self.generate_unique_username(email)}
-            )
-        except IntegrityError:
-            messages.error(self.request, f"A user with the email {email} already exists.")
-            return redirect(reverse('user_app:invite'))
-
-        if not created:
-            messages.error(self.request, f"A user with the email {email} already exists.")
-            return redirect(reverse('user_app:invite'))
+        # Generate token and registration link
+        token = generate_invite_token(email, user_type)
+        register_url = self.request.build_absolute_uri(reverse('user_app:register')) + f'?token={token}'
         
-        token = self.token_generator.make_token(user)
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        register_url = self.request.build_absolute_uri(
-    reverse('user_app:register') + f'?uid={uid}&token={token}&user_type={user_type}'
-)
-        
+        # Send invitation email
         send_mail(
             'Invite to Register',
-            f'Please register using the following link: {register_url}\nUser Type: {user_type}',
+            f'Please register using the following link: {register_url}',
             settings.DEFAULT_FROM_EMAIL,
             [email],
             fail_silently=False,
@@ -70,33 +48,19 @@ class InviteUserView(MyMixin, FormView):
         messages.success(self.request, f'Invitation sent to {email}.')
         return redirect(reverse('user_app:invite'))
 
-    def generate_unique_username(self, email):
-        base_username = email.split('@')[0]
-        unique_username = base_username
-        counter = 1
-        while MyUser.objects.filter(username=unique_username).exists():
-            unique_username = f"{base_username}_{counter}"
-            counter += 1
-        return unique_username
-
-
 class CustomPasswordResetConfirmView(PasswordResetConfirmView):
     template_name = 'users/password_reset_confirm.html'
     success_url = reverse_lazy('user_app:password_reset_complete')
     form_class = SetPasswordForm
 
     def form_valid(self, form):
-        # Save the new password
         user = form.save()
         messages.success(self.request, 'Your password has been changed successfully. Please log in.')
         return super().form_valid(form)
 
-
-
-
 class CustomLogoutView(LogoutView):
     def get_next_page(self):
-        return reverse_lazy('user_app:home') 
+        return reverse_lazy('user_app:home')
 
 class CustomPasswordResetView(PasswordResetView):
     form_class = CustomPasswordResetForm
@@ -106,12 +70,7 @@ class CustomPasswordResetView(PasswordResetView):
     success_url = reverse_lazy('user_app:password_reset_done')
     template_name = 'users/password_reset.html'
 
-class MyMixin(LoginRequiredMixin, UserPassesTestMixin):
-    """ Mixin for Authentication and User is Admin or not """
-    def test_func(self):
-        return self.request.user.user_type == 'admin'
-
-@login_required()
+@login_required
 def home(request):
     """ Home Page """
     admin_count = MyUser.objects.filter(user_type='admin').count()
@@ -122,56 +81,63 @@ def home(request):
     }
     return render(request, 'users/home.html', context)
 
-
 class UserRegistrationView(CreateView):
     model = MyUser
     form_class = UserCreateForm
     template_name = 'users/register.html'
     success_url = reverse_lazy('user_app:home')
-    token_generator = custom_token_generator
 
-    def get(self, request, *args, **kwargs):
-        uidb64 = request.GET.get('uid')
+    @method_decorator(csrf_protect)
+    def dispatch(self, request, *args, **kwargs):
         token = request.GET.get('token')
-        user_type = request.GET.get('user_type')
+        if not token:
+            messages.error(request, 'Invalid registration link.')
+            return redirect(reverse_lazy('user_app:invite'))
 
         try:
-            uid = force_str(urlsafe_base64_decode(uidb64))
-            user = MyUser.objects.get(pk=uid)
-        except (TypeError, ValueError, OverflowError, MyUser.DoesNotExist):
-            user = None
-
-        if user is not None and self.token_generator.check_token(user, token):
-            # Token is valid
-            return super().get(request, *args, **kwargs)
-        else:
-            messages.error(request, 'The invitation link is invalid or has expired.')
+            # Decode the token
+            access_token = AccessToken(token)
+            email = access_token['email']
+            user_type = access_token['user_type']
+            
+            # Store email and user_type in session
+            request.session['email'] = email
+            request.session['user_type'] = user_type
+            
+            if user_type not in ['admin', 'customer']:
+                messages.error(request, 'Invalid user type.')
+                return redirect(reverse_lazy('user_app:invite'))
+                
+        except TokenError:
+            messages.error(request, 'Invalid or expired registration link.')
             return redirect(reverse_lazy('user_app:invite'))
+
+        return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form):
         user = form.save(commit=False)
-        user_type = self.request.GET.get('user_type')
-        user.user_type = user_type  # Assign user type from URL
-        password = form.cleaned_data.get('password')
-        if password:
-            user.set_password(password)  # Hash the password
+        user.set_password(form.cleaned_data['password'])
+        
+        email = self.request.session.get('email')
+        user_type = self.request.session.get('user_type')
+        
+        if email and user_type:
+            user.email = email
+            user.user_type = user_type
+        else:
+            messages.error(self.request, 'Session data missing. Please try again.')
+            return redirect(reverse_lazy('user_app:invite'))
+        
         user.save()
-        messages.success(self.request, f"{user.username} is created successfully!")
+        messages.success(self.request, mark_safe(f"<strong>{user.username}</strong> is created successfully!"))
         return redirect(self.success_url)
 
-
 class UserListView(MyMixin, ListView):
-    """ List of Users for Admin """
     model = MyUser
     template_name = 'users/list.html'
     context_object_name = 'data'
-    
-
-   
-
 
 class UserCreateView(MyMixin, CreateView):
-    """ Create a new User by Admin """
     model = MyUser
     form_class = UserCreateForm
     template_name = 'users/create.html'
@@ -186,7 +152,6 @@ class UserCreateView(MyMixin, CreateView):
         return redirect(reverse_lazy('user_app:list'))
 
 class UserUpdateView(MyMixin, UpdateView):
-    """ Update a user by Admin """
     model = MyUser
     form_class = UserUpdateForm
     template_name = 'users/update.html'
@@ -194,22 +159,20 @@ class UserUpdateView(MyMixin, UpdateView):
 
     def form_valid(self, form):
         super(UserUpdateView, self).form_valid(form)
-        messages.success(self.request, f"user is updated successfully!")
+        messages.success(self.request, "User is updated successfully!")
         return redirect(reverse_lazy('user_app:list'))
 
 class UserDeleteView(MyMixin, DeleteView):
-    """ Delete a user by Admin """
     model = MyUser
     template_name = 'users/delete.html'
     success_url = reverse_lazy('user_app:list')
 
     def form_valid(self, form):
         super(UserDeleteView, self).form_valid(form)
-        messages.warning(self.request, f"user is deleted successfully!")
+        messages.warning(self.request, "User is deleted successfully!")
         return redirect(reverse_lazy('user_app:list'))
 
 class UserProfile(LoginRequiredMixin, UpdateView):
-    """ All User Profile Page """
     def get(self, request, **kwargs):
         user = request.user
         data = MyUser.objects.get(id=user.id)
