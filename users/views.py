@@ -196,3 +196,34 @@ class UserProfile(LoginRequiredMixin, UpdateView):
             p_form.save()
             messages.success(request, f"{username}'s profile has been updated successfully!")
         return redirect(reverse_lazy('user_app:profile', kwargs={'pk': user.id}))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from rest_framework_simplejwt.tokens import RefreshToken
+from users.models import MyUser
+import uuid
+
+def generate_invite_token(email, user_type):
+    temp_user = MyUser(email=email, username=str(uuid.uuid4()))
+    
+    refresh = RefreshToken.for_user(temp_user)
+    
+    refresh['email'] = email
+    refresh['user_type'] = user_type
+    
+    return str(refresh.access_token)
+
