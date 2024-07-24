@@ -81,15 +81,7 @@ WSGI_APPLICATION = 'user_management.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
-DATABASES = {
-       'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'user',
-        'USER': 'postgres',
-        'PASSWORD': '12345',
-        'HOST': 'localhost'
-    }
-}
+
 
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
@@ -151,12 +143,6 @@ PASSWORD_RESET_TIMEOUT_DAYS = 1
 
 #email configration
 
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'subhan.abidi@eastriverdigital.com'
-EMAIL_HOST_PASSWORD = 'Ali@12345'
 
 
 
