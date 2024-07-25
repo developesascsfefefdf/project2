@@ -9,15 +9,17 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
 from django.utils.safestring import mark_safe
 from django.core.mail import send_mail
+from django.contrib.auth.forms import SetPasswordForm  # Import this line
 
 from users.models import MyUser
 from users.forms import UserCreateForm, UserUpdateForm, CustomerUpdateForm, CustomerProfileForm, CustomPasswordResetForm, InviteUserForm
 from django.contrib.auth.views import PasswordResetView, LogoutView, PasswordResetConfirmView
 from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.exceptions import TokenError
-from .utils import generate_invite_token
-from django.contrib.auth.forms import SetPasswordForm
-
+from .utils import generate_invite_token, decrypt_password
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.tokens import UntypedToken
+from datetime import datetime, timezone
 
 class MyMixin(LoginRequiredMixin, UserPassesTestMixin):
     """Mixin for Authentication and User is Admin or not."""
@@ -81,56 +83,57 @@ def home(request):
     }
     return render(request, 'users/home.html', context)
 
+
+
 class UserRegistrationView(CreateView):
     model = MyUser
     form_class = UserCreateForm
     template_name = 'users/register.html'
     success_url = reverse_lazy('user_app:home')
 
-    @method_decorator(csrf_protect)
     def dispatch(self, request, *args, **kwargs):
         token = request.GET.get('token')
-        if not token:
-            messages.error(request, 'Invalid registration link.')
-            return redirect(reverse_lazy('user_app:invite'))
+        self.email_from_token = None
+        self.user_type = None
 
-        try:
-            # Decode the token
-            access_token = AccessToken(token)
-            email = access_token['email']
-            user_type = access_token['user_type']
-            
-            # Store email and user_type in session
-            request.session['email'] = email
-            request.session['user_type'] = user_type
-            
-            if user_type not in ['admin', 'customer']:
-                messages.error(request, 'Invalid user type.')
+        if token:
+            try:
+                decoded_token = AccessToken(token)
+                exp_timestamp = decoded_token.get("exp")
+
+                # Convert the Unix timestamp to a datetime object
+                exp_datetime = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
+
+                if datetime.now(timezone.utc) > exp_datetime:
+                    raise TokenError("Token has expired.")
+                self.email_from_token = decoded_token.get('email')
+                self.user_type = decoded_token.get('user_type')
+            except TokenError:
+                messages.error(request, 'The registration link is invalid or has expired.')
                 return redirect(reverse_lazy('user_app:invite'))
-                
-        except TokenError:
-            messages.error(request, 'Invalid or expired registration link.')
+        else:
+            messages.error(request, 'Invalid registration link.')
             return redirect(reverse_lazy('user_app:invite'))
 
         return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form):
         user = form.save(commit=False)
+        user_email = form.cleaned_data['email']
+
+        if user_email != self.email_from_token:
+            form.add_error('email', 'The email does not match the one used for invitation.')
+            return self.form_invalid(form)
+
         user.set_password(form.cleaned_data['password'])
-        
-        email = self.request.session.get('email')
-        user_type = self.request.session.get('user_type')
-        
-        if email and user_type:
-            user.email = email
-            user.user_type = user_type
-        else:
-            messages.error(self.request, 'Session data missing. Please try again.')
-            return redirect(reverse_lazy('user_app:invite'))
-        
+        user.user_type = self.user_type
         user.save()
-        messages.success(self.request, mark_safe(f"<strong>{user.username}</strong> is created successfully!"))
+        
+        messages.success(self.request, f"{user.username} is created successfully!")
         return redirect(self.success_url)
+
+
+
 
 class UserListView(MyMixin, ListView):
     model = MyUser
@@ -158,7 +161,7 @@ class UserUpdateView(MyMixin, UpdateView):
     success_url = reverse_lazy('user_app:list')
 
     def form_valid(self, form):
-        super(UserUpdateView, self).form_valid(form)
+        super().form_valid(form)
         messages.success(self.request, "User is updated successfully!")
         return redirect(reverse_lazy('user_app:list'))
 
@@ -168,7 +171,7 @@ class UserDeleteView(MyMixin, DeleteView):
     success_url = reverse_lazy('user_app:list')
 
     def form_valid(self, form):
-        super(UserDeleteView, self).form_valid(form)
+        super().form_valid(form)
         messages.warning(self.request, "User is deleted successfully!")
         return redirect(reverse_lazy('user_app:list'))
 
@@ -197,33 +200,21 @@ class UserProfile(LoginRequiredMixin, UpdateView):
             messages.success(request, f"{username}'s profile has been updated successfully!")
         return redirect(reverse_lazy('user_app:profile', kwargs={'pk': user.id}))
 
+def login_view(request):
+    if request.method == 'POST':
+        form = CustomLoginForm(request.POST)
+        if form.is_valid():
+            username = form.cleaned_data['username']
+            password = form.cleaned_data['password']
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-from rest_framework_simplejwt.tokens import RefreshToken
-from users.models import MyUser
-import uuid
-
-def generate_invite_token(email, user_type):
-    temp_user = MyUser(email=email, username=str(uuid.uuid4()))
-    
-    refresh = RefreshToken.for_user(temp_user)
-    
-    refresh['email'] = email
-    refresh['user_type'] = user_type
-    
-    return str(refresh.access_token)
-
+            # Authenticate the user using the provided credentials
+            user = authenticate(request, username=username, password=password)
+            if user is not None:
+                login(request, user)
+                return redirect('home')
+            else:
+                # Invalid credentials
+                return render(request, 'users/login.html', {'form': form, 'error': 'Invalid login credentials.'})
+    else:
+        form = CustomLoginForm()
+    return render(request, 'users/login.html', {'form': form})
